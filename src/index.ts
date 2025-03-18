@@ -9,7 +9,7 @@ import {
   ErrorCode,
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
-import { 
+import {
   isCommandBlocked,
   isArgumentBlocked,
   parseCommand,
@@ -80,13 +80,13 @@ class CLIServer {
     if (this.config.security.enableInjectionProtection) {
       // Get shell-specific config
       const shellConfig = this.config.shells[shell];
-      
+
       // Use shell-specific operator validation
       validateShellOperators(command, shellConfig);
     }
-  
+
     const { command: executable, args } = parseCommand(command);
-  
+
     // Check for blocked commands
     if (isCommandBlocked(executable, Array.from(this.blockedCommands))) {
       throw new McpError(
@@ -94,7 +94,7 @@ class CLIServer {
         `Command is blocked: "${extractCommandName(executable)}"`
       );
     }
-  
+
     // Check for blocked arguments
     if (isArgumentBlocked(args, this.config.security.blockedArguments)) {
       throw new McpError(
@@ -102,7 +102,7 @@ class CLIServer {
         'One or more arguments are blocked. Check configuration for blocked patterns.'
       );
     }
-  
+
     // Validate command length
     if (command.length > this.config.security.maxCommandLength) {
       throw new McpError(
@@ -125,7 +125,7 @@ class CLIServer {
     // List available resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
       const sshConnections = readSSHConnections() as Record<string, any>;
-      
+
       // Create resources for each SSH connection
       const resources = Object.entries(sshConnections).map(([id, config]) => ({
         uri: `ssh://${id}`,
@@ -133,7 +133,7 @@ class CLIServer {
         description: `SSH connection to ${config.host}:${config.port} as ${config.username}`,
         mimeType: "application/json"
       }));
-      
+
       // Add a resource for the current working directory
       resources.push({
         uri: "cli://currentdir",
@@ -141,7 +141,7 @@ class CLIServer {
         description: "The current working directory of the CLI server",
         mimeType: "text/plain"
       });
-      
+
       // Add a resource for SSH configuration
       resources.push({
         uri: "ssh://config",
@@ -157,35 +157,35 @@ class CLIServer {
         description: "Main CLI server configuration (excluding sensitive data)",
         mimeType: "application/json"
       });
-      
+
       return { resources };
     });
 
     // Read resource content
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const uri = request.params.uri;
-      
+
       // Handle SSH connection resources
       if (uri.startsWith("ssh://") && uri !== "ssh://config") {
         const connectionId = uri.slice(6); // Remove "ssh://" prefix
         const connections = readSSHConnections() as Record<string, any>;
         const connectionConfig = connections[connectionId];
-        
+
         if (!connectionConfig) {
           throw new McpError(
             ErrorCode.InvalidRequest,
             `Unknown SSH connection: ${connectionId}`
           );
         }
-        
+
         // Return connection details (excluding sensitive info)
         const safeConfig = { ...connectionConfig };
-        
+
         // Remove sensitive information
         if (safeConfig.password) {
           safeConfig.password = "********";
         }
-        
+
         return {
           contents: [{
             uri,
@@ -194,19 +194,19 @@ class CLIServer {
           }]
         };
       }
-      
+
       // Handle SSH configuration resource
       if (uri === "ssh://config") {
         const connections = readSSHConnections() as Record<string, any>;
         const safeConnections = { ...connections };
-        
+
         // Remove sensitive information from all connections
         for (const connection of Object.values(safeConnections)) {
           if (connection.password) {
             connection.password = "********";
           }
         }
-        
+
         return {
           contents: [{
             uri,
@@ -220,7 +220,7 @@ class CLIServer {
           }]
         };
       }
-      
+
       // Handle current directory resource
       if (uri === "cli://currentdir") {
         const currentDir = process.cwd();
@@ -232,7 +232,7 @@ class CLIServer {
           }]
         };
       }
-      
+
       // Handle CLI configuration resource
       if (uri === "cli://config") {
         // Create a safe copy of config (excluding sensitive information)
@@ -250,7 +250,7 @@ class CLIServer {
             connections: Object.keys(this.config.ssh.connections).length
           }
         };
-        
+
         return {
           contents: [{
             uri,
@@ -259,7 +259,7 @@ class CLIServer {
           }]
         };
       }
-      
+
       throw new McpError(
         ErrorCode.InvalidRequest,
         `Unknown resource URI: ${uri}`
@@ -304,7 +304,7 @@ Example usage (Git Bash):
             properties: {
               shell: {
                 type: "string",
-                enum: Object.keys(this.config.shells).filter(shell => 
+                enum: Object.keys(this.config.shells).filter(shell =>
                   this.config.shells[shell as keyof typeof this.config.shells].enabled
                 ),
                 description: "Shell to use for command execution"
@@ -538,7 +538,7 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
         switch (request.params.name) {
           case "execute_command": {
             const args = z.object({
-              shell: z.enum(Object.keys(this.config.shells).filter(shell => 
+              shell: z.enum(Object.keys(this.config.shells).filter(shell =>
                 this.config.shells[shell as keyof typeof this.config.shells].enabled
               ) as [string, ...string[]]),
               command: z.string(),
@@ -549,13 +549,13 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
             this.validateCommand(args.shell as keyof ServerConfig['shells'], args.command);
 
             // Validate working directory if provided
-            let workingDir = args.workingDir ? 
-              path.resolve(args.workingDir) : 
-              process.cwd();
+            let workingDir = args.workingDir ?
+              path.resolve(args.workingDir) :
+              (this.config.shells[args.shell as keyof typeof this.config.shells].defaultWorkingDirectory || process.cwd());
 
             const shellKey = args.shell as keyof typeof this.config.shells;
             const shellConfig = this.config.shells[shellKey];
-            
+
             if (this.config.security.restrictWorkingDirectory) {
               const isAllowedPath = Array.from(this.allowedPaths).some(
                 allowedPath => workingDir.startsWith(allowedPath)
@@ -572,12 +572,20 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
             // Execute command
             return new Promise((resolve, reject) => {
               let shellProcess: ReturnType<typeof spawn>;
-              
+
               try {
+                const env = {
+                  ...process.env,
+                  PATHEXT: '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC'
+                };
                 shellProcess = spawn(
                   shellConfig.command,
                   [...shellConfig.args, args.command],
-                  { cwd: workingDir, stdio: ['pipe', 'pipe', 'pipe'] }
+                  {
+                    cwd: workingDir,
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    env
+                  }
                 );
               } catch (err) {
                 throw new McpError(
@@ -607,7 +615,7 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
               shellProcess.on('close', (code) => {
                 // Prepare detailed result message
                 let resultMessage = '';
-                
+
                 if (code === 0) {
                   resultMessage = output || 'Command completed successfully (no output)';
                 } else {
@@ -889,13 +897,13 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
 
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
-    
+
     // Set up cleanup handler
     process.on('SIGINT', async () => {
       await this.cleanup();
       process.exit(0);
     });
-    
+
     await this.server.connect(transport);
     console.error("Windows CLI MCP Server running on stdio");
   }
@@ -905,7 +913,7 @@ Use this to cleanly close SSH connections when they're no longer needed.`,
 const main = async () => {
   try {
     const args = await parseArgs();
-    
+
     // Handle --init-config flag
     if (args['init-config']) {
       try {
@@ -920,7 +928,7 @@ const main = async () => {
 
     // Load configuration
     const config = loadConfig(args.config);
-    
+
     const server = new CLIServer(config);
     await server.run();
   } catch (error) {
